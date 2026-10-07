@@ -431,13 +431,21 @@ function saveCafeSettings() {
 }
 
 function removeStaffSecurityPassword() {
+    const currentPass = getAdminPassword() || getLoginPassword() || '';
+    if (!currentPass) {
+        showCustomAlert('No security password is set.', 'Information');
+        return;
+    }
+
     showCustomConfirm('Are you sure you want to remove the security password and disable tab lock protection?', () => {
-        Storage.set('adminPassword', '');
-        Storage.set('loginPassword', '');
-        Storage.set('locked_tabs', []);
-        sessionStorage.removeItem('unlockedTabs');
-        loadCafeSettings();
-        showCustomAlert('Security password removed. Tab protection disabled.', 'Password Removed');
+        openActionPasswordModal(() => {
+            Storage.set('adminPassword', '');
+            Storage.set('loginPassword', '');
+            Storage.set('locked_tabs', []);
+            sessionStorage.removeItem('unlockedTabs');
+            loadCafeSettings();
+            showCustomAlert('Security password removed. Tab protection disabled.', 'Password Removed');
+        }, 'admin', 'Security Password Required', 'Please enter your current security password to remove protection.');
     });
 }
 
@@ -931,8 +939,10 @@ window.handleStaffPassword = (event) => {
 let pendingActionCallback = null;
 let pendingActionPasswordType = 'admin';
 
-window.openActionPasswordModal = (callback, passwordType = 'admin') => {
-    const requiredPassword = passwordType === 'login' ? getLoginPassword() : getAdminPassword();
+window.openActionPasswordModal = (callback, passwordType = 'admin', customTitle = null, customDesc = null) => {
+    const adminPass = getAdminPassword();
+    const loginPass = getLoginPassword();
+    const requiredPassword = passwordType === 'login' ? (loginPass || adminPass) : (adminPass || loginPass);
     if (requiredPassword === '') {
         if (callback) callback();
         return;
@@ -946,8 +956,8 @@ window.openActionPasswordModal = (callback, passwordType = 'admin') => {
         // Update modal title and text based on type
         const headerText = modal.querySelector('.modal-header h3');
         const bodyText = modal.querySelector('.modal-body p');
-        if (headerText) headerText.textContent = passwordType === 'login' ? 'Login Password Required' : 'Admin Access Required';
-        if (bodyText) bodyText.textContent = passwordType === 'login' ? 'This section requires login password to access.' : 'This section requires admin password to access.';
+        if (headerText) headerText.textContent = customTitle || (passwordType === 'login' ? 'Login Password Required' : 'Admin Access Required');
+        if (bodyText) bodyText.textContent = customDesc || (passwordType === 'login' ? 'This section requires login password to access.' : 'This section requires admin password to access.');
         const passwordInput = document.getElementById('actionPasswordInput');
         if (passwordInput) {
             passwordInput.value = '';
@@ -985,9 +995,17 @@ window.handleActionPassword = (event) => {
     const errorMessage = document.getElementById('actionPasswordError');
     const enteredPassword = passwordInput.value.trim();
 
-    const requiredPassword = pendingActionPasswordType === 'login' ? getLoginPassword() : getAdminPassword();
+    const adminPass = getAdminPassword();
+    const loginPass = getLoginPassword();
+    let isCorrect = false;
 
-    if (enteredPassword === requiredPassword) {
+    if (pendingActionPasswordType === 'login') {
+        isCorrect = (loginPass !== '' && enteredPassword === loginPass) || (loginPass === '' && adminPass !== '' && enteredPassword === adminPass);
+    } else {
+        isCorrect = (adminPass !== '' && enteredPassword === adminPass) || (adminPass === '' && loginPass !== '' && enteredPassword === loginPass) || (loginPass !== '' && enteredPassword === loginPass);
+    }
+
+    if (isCorrect) {
         // Store the callback before closing modal
         const callback = pendingActionCallback;
 
@@ -1013,10 +1031,8 @@ window.handleActionPassword = (event) => {
 };
 
 // ==========================================
-// SUPERADMIN & APP EXPIRY LOCK TIMER
+// APP EXPIRY LOCK TIMER
 // ==========================================
-const SUPERADMIN_PASSWORDS = ['Salikleo.1212', 'salikleo.1212', 'Salik@786', 'salik786', 'Salik@SuperAdmin786', 'admin@salik786'];
-let isSuperadminTimerUnlocked = false;
 
 // Initialize or update default 7-day timer if not already set or updated
 (function initDefault7DayTimer() {
@@ -1036,29 +1052,6 @@ let isSuperadminTimerUnlocked = false;
         }
     } catch(e) {}
 })();
-
-function verifySuperadminPassword(entered) {
-    if (!entered) return false;
-    return SUPERADMIN_PASSWORDS.includes(entered.trim());
-}
-
-window.unlockTimerSettings = () => {
-    const input = document.getElementById('superadminAuthInput');
-    const err = document.getElementById('superadminAuthError');
-    const entered = input ? input.value.trim() : '';
-
-    if (verifySuperadminPassword(entered)) {
-        isSuperadminTimerUnlocked = true;
-        if (err) err.style.display = 'none';
-        if (input) input.value = '';
-        renderTimerControls();
-    } else {
-        if (err) {
-            err.textContent = 'Incorrect Superadmin Password.';
-            err.style.display = 'block';
-        }
-    }
-};
 
 window.saveExpiryTimer = () => {
     const durationInput = document.getElementById('expiryDurationInput');
@@ -1100,7 +1093,6 @@ window.disableExpiryTimer = () => {
 function renderTimerControls() {
     const config = Storage.get('appExpiryConfig');
     const badge = document.getElementById('expiryTimerStatusBadge');
-    const promptDiv = document.getElementById('superadminAuthPrompt');
     const controlsDiv = document.getElementById('superadminTimerControls');
     const detailsDiv = document.getElementById('expiryTimerDetails');
     const durationInput = document.getElementById('expiryDurationInput');
@@ -1145,13 +1137,7 @@ function renderTimerControls() {
         if (unitSelect && config.unit) unitSelect.value = config.unit;
     }
 
-    if (isSuperadminTimerUnlocked) {
-        if (promptDiv) promptDiv.style.display = 'none';
-        if (controlsDiv) controlsDiv.style.display = 'flex';
-    } else {
-        if (promptDiv) promptDiv.style.display = 'flex';
-        if (controlsDiv) controlsDiv.style.display = 'none';
-    }
+    if (controlsDiv) controlsDiv.style.display = 'flex';
 }
 
 function checkAppExpiry() {
@@ -1171,26 +1157,12 @@ function checkAppExpiry() {
 }
 
 window.unlockAppFromOverlay = () => {
-    const input = document.getElementById('lockSuperadminPassword');
-    const err = document.getElementById('lockErrorMsg');
-    const entered = input ? input.value.trim() : '';
-
-    if (verifySuperadminPassword(entered)) {
-        if (err) err.style.display = 'none';
-        if (input) input.value = '';
-
-        // Disable expired timer so developer can work freely
-        Storage.set('appExpiryConfig', { enabled: false });
-        const overlay = document.getElementById('appLockOverlay');
-        if (overlay) overlay.style.display = 'none';
-        showCustomAlert('Application successfully unlocked! The timer has been reset/disabled.', 'Hangout Lounge & Co.');
-        renderTimerControls();
-    } else {
-        if (err) {
-            err.textContent = 'Incorrect Superadmin Password. Access Denied.';
-            err.style.display = 'block';
-        }
-    }
+    // Disable expired timer so application can be unlocked
+    Storage.set('appExpiryConfig', { enabled: false });
+    const overlay = document.getElementById('appLockOverlay');
+    if (overlay) overlay.style.display = 'none';
+    showCustomAlert('Application successfully unlocked! The timer has been reset/disabled.', 'Hangout Lounge & Co.');
+    renderTimerControls();
 };
 
 window.closeAppFromOverlay = () => {
@@ -1906,12 +1878,37 @@ function generateFullReceiptHTML(order) {
 }
 
 // Master helper function to open and print receipt window
-function openReceiptPrintWindow(receiptHTML, title) {
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) return;
+function openReceiptPrintWindow(receiptHTML, title, callback = null) {
+    return new Promise((resolve) => {
+        let isDone = false;
+        const done = () => {
+            if (isDone) return;
+            isDone = true;
+            if (typeof callback === 'function') {
+                try { callback(); } catch (e) {}
+            }
+            resolve();
+        };
 
-    printWindow.document.open();
-    printWindow.document.write(`
+        const printWindow = window.open('', '_blank');
+        if (!printWindow) {
+            done();
+            return;
+        }
+
+        const jobId = '__print_rcpt_cb_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+        window[jobId] = () => {
+            delete window[jobId];
+            done();
+        };
+
+        const fallbackTimer = setTimeout(() => {
+            delete window[jobId];
+            done();
+        }, 5000);
+
+        printWindow.document.open();
+        printWindow.document.write(`
         <!DOCTYPE html>
         <html>
             <head>
@@ -1975,6 +1972,13 @@ function openReceiptPrintWindow(receiptHTML, title) {
                 </div>
                 <script>
                     var hasPrinted = false;
+                    function notifyParentDone() {
+                        try {
+                            if (window.opener && typeof window.opener['${jobId}'] === 'function') {
+                                window.opener['${jobId}']();
+                            }
+                        } catch(e) {}
+                    }
                     function triggerPrint() {
                         if (hasPrinted) return;
                         hasPrinted = true;
@@ -1986,9 +1990,13 @@ function openReceiptPrintWindow(receiptHTML, title) {
                         }
                     }
                     window.addEventListener('afterprint', function() {
+                        notifyParentDone();
                         setTimeout(function() {
                             try { window.close(); } catch(e) {}
                         }, 150);
+                    });
+                    window.addEventListener('beforeunload', function() {
+                        notifyParentDone();
                     });
                     function schedulePrint() {
                         if (document.fonts && document.fonts.ready) {
@@ -2027,7 +2035,8 @@ function openReceiptPrintWindow(receiptHTML, title) {
             </body>
         </html>
     `);
-    printWindow.document.close();
+        printWindow.document.close();
+    });
 }
 
 function formatKOTItems(items) {
@@ -4175,6 +4184,11 @@ window.loadSales = function loadSales() {
         }, 0);
 
     // Calculate monthly tax
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    monthStart.setHours(0, 0, 0, 0);
+    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    monthEnd.setHours(23, 59, 59, 999);
+
     const monthlyTax = orders
         .filter(o => {
             if (!o.date) return false;
@@ -5430,10 +5444,64 @@ function setEmployeeAttendance(records) {
     Storage.set('employeeAttendance', records);
 }
 
+function calculateAttendanceDuration(timeInStr, timeOutStr, dateStr) {
+    if (!timeInStr || !timeOutStr) return { formatted: '—', decimal: 0, minutes: 0 };
+    try {
+        const baseDate = dateStr || '2000-01-01';
+        const parseTime = (str) => {
+            const match = str.match(/(\d+):(\d+)(?::\d+)?\s*(AM|PM)?/i);
+            if (!match) return null;
+            let hours = parseInt(match[1], 10);
+            const minutes = parseInt(match[2], 10);
+            const ampm = match[3] ? match[3].toUpperCase() : null;
+            if (ampm === 'PM' && hours < 12) hours += 12;
+            if (ampm === 'AM' && hours === 12) hours = 0;
+            const d = new Date(baseDate + 'T00:00:00');
+            d.setHours(hours, minutes, 0, 0);
+            return d;
+        };
+        const dIn = parseTime(timeInStr);
+        let dOut = parseTime(timeOutStr);
+        if (!dIn || !dOut) return { formatted: '—', decimal: 0, minutes: 0 };
+
+        if (dOut < dIn) {
+            dOut = new Date(dOut.getTime() + 24 * 60 * 60 * 1000);
+        }
+        const diffMs = dOut.getTime() - dIn.getTime();
+        const totalMins = Math.floor(diffMs / (1000 * 60));
+        const hrs = Math.floor(totalMins / 60);
+        const mins = totalMins % 60;
+
+        let formatted = '';
+        if (hrs > 0 && mins > 0) formatted = `${hrs}h ${mins}m`;
+        else if (hrs > 0) formatted = `${hrs} hrs`;
+        else formatted = `${mins} mins`;
+
+        return { formatted, decimal: Math.round((totalMins / 60) * 10) / 10, minutes: totalMins };
+    } catch(e) {
+        return { formatted: '—', decimal: 0, minutes: 0 };
+    }
+}
+
+function getDayOfWeekName(dateStr) {
+    if (!dateStr) return '—';
+    try {
+        const d = new Date(dateStr + 'T00:00:00');
+        if (isNaN(d.getTime())) return '—';
+        return d.toLocaleDateString('en-US', { weekday: 'short' });
+    } catch(e) {
+        return '—';
+    }
+}
+
 function renderAttendance(employeeId) {
     const listEl = document.getElementById('attendanceList');
+    const footerEl = document.getElementById('attendanceSummaryFooter');
     const inBtn = document.getElementById('attendanceTimeInBtn');
     const outBtn = document.getElementById('attendanceTimeOutBtn');
+    const statTotalDays = document.getElementById('attnStatTotalDays');
+    const statTotalHours = document.getElementById('attnStatTotalHours');
+    const statTodayStatus = document.getElementById('attnStatTodayStatus');
     if (!listEl) return;
 
     const records = getEmployeeAttendance()
@@ -5442,39 +5510,104 @@ function renderAttendance(employeeId) {
 
     const today = getLocalISODate();
     const todayRec = records.find(r => r.date === today);
-    if (inBtn) inBtn.disabled = !!(todayRec && todayRec.timeIn);
-    if (outBtn) outBtn.disabled = !(todayRec && todayRec.timeIn) || !!(todayRec && todayRec.timeOut);
+
+    // Update buttons state
+    if (inBtn) {
+        inBtn.disabled = !!(todayRec && todayRec.timeIn);
+        inBtn.style.opacity = inBtn.disabled ? '0.5' : '1';
+        inBtn.style.cursor = inBtn.disabled ? 'not-allowed' : 'pointer';
+    }
+    if (outBtn) {
+        outBtn.disabled = !(todayRec && todayRec.timeIn) || !!(todayRec && todayRec.timeOut);
+        outBtn.style.opacity = outBtn.disabled ? '0.5' : '1';
+        outBtn.style.cursor = outBtn.disabled ? 'not-allowed' : 'pointer';
+    }
+
+    // Update stats pills
+    if (statTotalDays) statTotalDays.textContent = records.length;
+
+    let sumMinutes = 0;
+    records.forEach(r => {
+        if (r.timeIn && r.timeOut) {
+            const dur = calculateAttendanceDuration(r.timeIn, r.timeOut, r.date);
+            sumMinutes += dur.minutes;
+        }
+    });
+
+    const sumHrs = Math.floor(sumMinutes / 60);
+    const sumMins = sumMinutes % 60;
+    const formattedSum = sumMins > 0 ? `${sumHrs}h ${sumMins}m` : `${sumHrs} hrs`;
+    if (statTotalHours) statTotalHours.textContent = sumMinutes > 0 ? formattedSum : '0h';
+
+    if (statTodayStatus) {
+        if (!todayRec) {
+            statTodayStatus.textContent = 'Not Logged';
+            statTodayStatus.style.color = '#92400e';
+        } else if (todayRec.timeIn && !todayRec.timeOut) {
+            statTodayStatus.textContent = `🟢 In (${todayRec.timeIn})`;
+            statTodayStatus.style.color = '#15803d';
+        } else if (todayRec.timeIn && todayRec.timeOut) {
+            statTodayStatus.textContent = `✔ Complete`;
+            statTodayStatus.style.color = '#1e40af';
+        }
+    }
 
     if (records.length === 0) {
-        listEl.innerHTML = `<tr><td colspan="4" style="text-align:center; padding: 24px; color:#999; font-weight: 600;">${t('No attendance found')}</td></tr>`;
+        listEl.innerHTML = `
+            <tr>
+                <td colspan="7" style="text-align:center; padding: 36px 16px; color: #8a8886; background: #faf9f8;">
+                    <div style="font-size: 32px; margin-bottom: 8px;">📊</div>
+                    <div style="font-weight: 700; font-size: 14px; color: #323130;">No Attendance Records Found</div>
+                    <div style="font-size: 12px; color: #605e5c; margin-top: 4px;">Click "Time In" above to mark attendance for today.</div>
+                </td>
+            </tr>
+        `;
+        if (footerEl) footerEl.innerHTML = '';
         return;
     }
 
     listEl.innerHTML = records.map((rec, idx) => {
         const d = rec.date ? formatDate(new Date(rec.date + 'T00:00:00')) : '-';
-        const ti = rec.timeIn || '-';
-        const to = rec.timeOut || '-';
+        const dayOfWeek = getDayOfWeekName(rec.date);
+        const ti = rec.timeIn || '—';
+        const to = rec.timeOut || '—';
+        const duration = calculateAttendanceDuration(rec.timeIn, rec.timeOut, rec.date);
+
         const isComplete = !!(rec.timeIn && rec.timeOut);
         const isIn = !!(rec.timeIn && !rec.timeOut);
-        const statusBg = isComplete ? '#e8f5e9' : (isIn ? '#fff3e0' : '#f5f5f5');
-        const statusColor = isComplete ? '#2e7d32' : (isIn ? '#e65100' : '#757575');
-        const statusBorder = isComplete ? '#c8e6c9' : (isIn ? '#ffe0b2' : '#e0e0e0');
-        const statusText = isComplete ? 'Complete' : (isIn ? 'In' : '—');
-        const rowBg = idx % 2 === 0 ? '#ffffff' : '#f8f9fa';
+        const statusBg = isComplete ? '#dcfce7' : (isIn ? '#fef3c7' : '#f1f5f9');
+        const statusColor = isComplete ? '#15803d' : (isIn ? '#b45309' : '#64748b');
+        const statusBorder = isComplete ? '#bbf7d0' : (isIn ? '#fde68a' : '#e2e8f0');
+        const statusText = isComplete ? '✔ Complete' : (isIn ? '⏱ Clocked In' : '—');
+        const rowBg = idx % 2 === 0 ? '#ffffff' : '#f9fbf9';
 
         return `
-            <tr style="background: ${rowBg}; border-bottom: 1px solid #eef0f3;">
-                <td style="padding: 12px 14px; font-weight: 600; color: #2c3e50; white-space: nowrap;">${d}</td>
-                <td style="padding: 12px 14px; color: #333; font-weight: 500; white-space: nowrap;">${ti}</td>
-                <td style="padding: 12px 14px; color: #333; font-weight: 500; white-space: nowrap;">${to}</td>
-                <td style="padding: 12px 14px; text-align: center; white-space: nowrap;">
-                    <span style="background: ${statusBg}; color: ${statusColor}; border: 1px solid ${statusBorder}; padding: 4px 12px; border-radius: 12px; font-weight: 700; font-size: 12px; display: inline-block;">
+            <tr style="background: ${rowBg}; transition: background 0.15s;" onmouseover="this.style.background='#eff6fc'" onmouseout="this.style.background='${rowBg}'">
+                <td style="padding: 8px; text-align: center; font-family: monospace; font-size: 12px; color: #605e5c; background: #f3f2f1; border-right: 1px solid #d2d0ce; border-bottom: 1px solid #e1dfdd; font-weight: 600;">${idx + 1}</td>
+                <td style="padding: 9px 14px; border-right: 1px solid #e1dfdd; border-bottom: 1px solid #e1dfdd; font-weight: 600; color: #1e293b; white-space: nowrap;">${d}</td>
+                <td style="padding: 9px 14px; border-right: 1px solid #e1dfdd; border-bottom: 1px solid #e1dfdd; color: #64748b; font-weight: 500; white-space: nowrap;">${dayOfWeek}</td>
+                <td style="padding: 9px 14px; border-right: 1px solid #e1dfdd; border-bottom: 1px solid #e1dfdd; color: #107c41; font-weight: 600; white-space: nowrap;">${ti}</td>
+                <td style="padding: 9px 14px; border-right: 1px solid #e1dfdd; border-bottom: 1px solid #e1dfdd; color: #d97706; font-weight: 600; white-space: nowrap;">${to}</td>
+                <td style="padding: 9px 14px; border-right: 1px solid #e1dfdd; border-bottom: 1px solid #e1dfdd; color: #2563eb; font-weight: 700; white-space: nowrap;">${duration.formatted}</td>
+                <td style="padding: 9px 14px; border-bottom: 1px solid #e1dfdd; text-align: center; white-space: nowrap;">
+                    <span style="background: ${statusBg}; color: ${statusColor}; border: 1px solid ${statusBorder}; padding: 3px 10px; border-radius: 12px; font-weight: 700; font-size: 11.5px; display: inline-block;">
                         ${statusText}
                     </span>
                 </td>
             </tr>
         `;
     }).join('');
+
+    if (footerEl) {
+        footerEl.innerHTML = `
+            <tr>
+                <td style="padding: 9px 8px; text-align: center; font-family: monospace; font-size: 12px; color: #107c41; border-right: 1px solid #c8e6c9; background: #e2f2e8; border-top: 2px solid #107c41;">∑</td>
+                <td colspan="4" style="padding: 9px 14px; border-right: 1px solid #c8e6c9; color: #0b5a2f; font-weight: 700; border-top: 2px solid #107c41;">Total Records Logged: ${records.length}</td>
+                <td style="padding: 9px 14px; border-right: 1px solid #c8e6c9; color: #1e40af; font-weight: 800; font-size: 13.5px; border-top: 2px solid #107c41;">${sumMinutes > 0 ? formattedSum : '0h'}</td>
+                <td style="padding: 9px 14px; text-align: center; color: #0b5a2f; font-weight: 700; border-top: 2px solid #107c41;">—</td>
+            </tr>
+        `;
+    }
 }
 
 window.openAttendanceModal = (employeeId) => {
@@ -5485,7 +5618,7 @@ window.openAttendanceModal = (employeeId) => {
     const modal = document.getElementById('attendanceModal');
     const nameEl = document.getElementById('attendanceEmployeeName');
     const titleEl = document.getElementById('attendanceModalTitle');
-    if (titleEl) titleEl.textContent = t('Attendance');
+    if (titleEl) titleEl.textContent = t('Staff Attendance Register');
     if (nameEl) nameEl.textContent = `${employee.name}`;
     if (modal) modal.style.display = 'flex';
     renderAttendance(employeeId);
@@ -14477,7 +14610,7 @@ function editHoldOrderInternal(orderId, order) {
     }, 100);
 }
 
-function saveHoldOrderChanges() {
+async function saveHoldOrderChanges() {
     if (cart.length === 0) {
         const saveChangesBtn = document.getElementById('saveChangesBtn');
         if (saveChangesBtn) {
@@ -14568,7 +14701,8 @@ function saveHoldOrderChanges() {
         const receiveTime = calculateReceiveTime(timeStr, now, holdOrders[orderIndex].waitingTime);
         const paymentMethod = selectedPaymentMethod;
 
-        newItemsForKOT.forEach((item, index) => {
+        for (let i = 0; i < newItemsForKOT.length; i++) {
+            const item = newItemsForKOT[i];
             const singleItemTable = formatKOTItems([item]);
             const kotHTML = `
                 <div style="text-align: center; font-family: 'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; width: 100%; line-height: 1.2;">
@@ -14591,10 +14725,9 @@ function saveHoldOrderChanges() {
                 </div>
             `;
 
-            setTimeout(() => {
-                printKOTWindow(kotHTML, displayOrderNumber);
-            }, index * 1200);
-        });
+            await printKOTWindow(kotHTML, displayOrderNumber);
+            await new Promise(res => setTimeout(res, 300));
+        }
     }
 
     // Reset editing state
@@ -14971,12 +15104,37 @@ function saveOrderAndGenerateContent() {
 }
 
 // Helper function to print KOT
-function printKOTWindow(kotHTML, displayOrderNumber) {
-    const kotWindow = window.open('', '_blank');
-    if (!kotWindow) return;
+function printKOTWindow(kotHTML, displayOrderNumber, callback = null) {
+    return new Promise((resolve) => {
+        let isDone = false;
+        const done = () => {
+            if (isDone) return;
+            isDone = true;
+            if (typeof callback === 'function') {
+                try { callback(); } catch (e) {}
+            }
+            resolve();
+        };
 
-    kotWindow.document.open();
-    kotWindow.document.write(`
+        const kotWindow = window.open('', '_blank');
+        if (!kotWindow) {
+            done();
+            return;
+        }
+
+        const jobId = '__print_kot_cb_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+        window[jobId] = () => {
+            delete window[jobId];
+            done();
+        };
+
+        const fallbackTimer = setTimeout(() => {
+            delete window[jobId];
+            done();
+        }, 5000);
+
+        kotWindow.document.open();
+        kotWindow.document.write(`
         <!DOCTYPE html>
         <html>
             <head>
@@ -15052,6 +15210,13 @@ function printKOTWindow(kotHTML, displayOrderNumber) {
                 <div id="kotContent" style="width: 100%;">${kotHTML}</div>
                 <script>
                     var hasPrinted = false;
+                    function notifyParentDone() {
+                        try {
+                            if (window.opener && typeof window.opener['${jobId}'] === 'function') {
+                                window.opener['${jobId}']();
+                            }
+                        } catch(e) {}
+                    }
                     function triggerPrint() {
                         if (hasPrinted) return;
                         hasPrinted = true;
@@ -15063,9 +15228,13 @@ function printKOTWindow(kotHTML, displayOrderNumber) {
                         }
                     }
                     window.addEventListener('afterprint', function() {
+                        notifyParentDone();
                         setTimeout(function() {
                             try { window.close(); } catch(e) {}
                         }, 150);
+                    });
+                    window.addEventListener('beforeunload', function() {
+                        notifyParentDone();
                     });
                     function schedulePrint() {
                         if (document.fonts && document.fonts.ready) {
@@ -15104,13 +15273,14 @@ function printKOTWindow(kotHTML, displayOrderNumber) {
             </body>
         </html>
     `);
-    kotWindow.document.close();
+        kotWindow.document.close();
+    });
 }
 
 // Helper function to print Order receipt
-function printOrderWindow(receipt, displayOrderNumber) {
-    if (!receipt) return;
-    openReceiptPrintWindow(receipt, `Customer Receipt - #${displayOrderNumber}`);
+function printOrderWindow(receipt, displayOrderNumber, callback = null) {
+    if (!receipt) return Promise.resolve();
+    return openReceiptPrintWindow(receipt, `Customer Receipt - #${displayOrderNumber}`, callback);
 }
 
 // Print only KOT
@@ -15259,7 +15429,8 @@ window.printKOT = function () {
 };
 
 // Print separate KOTs for each item in cart
-window.printSeparateKOTs = function () {
+// Print separate KOTs for each item in cart
+window.printSeparateKOTs = async function () {
     if (cart.length === 0) {
         const separateKOTsBtn = document.getElementById('separateKOTsBtn') || document.getElementById('kotsBtn');
         if (separateKOTsBtn) {
@@ -15289,9 +15460,9 @@ window.printSeparateKOTs = function () {
         const timeStr = formatTime(now);
         const receiveTime = calculateReceiveTime(timeStr, now, content.waitingTime);
 
-        // Print separate KOT for each item in the original cart
-        cartCopy.forEach((item, index) => {
-            // For each item, create a one-item KOT HTML
+        // Sequentially print separate KOT for each item in the original cart
+        for (let i = 0; i < cartCopy.length; i++) {
+            const item = cartCopy[i];
             const singleItemTable = formatKOTItems([item]);
             const kotHTML = `
                 <div style="text-align: center; font-family: 'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; width: 100%; line-height: 1.2;">
@@ -15315,11 +15486,13 @@ window.printSeparateKOTs = function () {
                 </div>
             `;
 
-            // Stagger separate KOT windows to ensure reliable sequential printing
-            setTimeout(() => {
-                printKOTWindow(kotHTML, displayOrderNumber);
-            }, index * 800);
-        });
+            await printKOTWindow(kotHTML, displayOrderNumber);
+            // Brief gap for printer spooling
+            await new Promise(res => setTimeout(res, 300));
+        }
+
+        // Print order receipt strictly at the last position after all individual KOTs
+        await printOrderWindow(content.receipt, displayOrderNumber);
     }
 };
 
@@ -15437,7 +15610,7 @@ window.processCashOrder = function () {
 };
 
 // Print both KOT and Order
-window.printKOTAndOrder = function () {
+window.printKOTAndOrder = async function () {
     if (cart.length === 0) {
         const kotOrderBtn = document.getElementById('kotOrderBtn');
         if (kotOrderBtn) {
@@ -15449,12 +15622,11 @@ window.printKOTAndOrder = function () {
     const content = holdOrderAndGenerateContent();
     if (content) {
         // Print 1 KOT receipt containing all items
-        printKOTWindow(content.kot, content.displayOrderNumber);
+        await printKOTWindow(content.kot, content.displayOrderNumber);
 
-        // Print 1 Customer Order receipt after a delay
-        setTimeout(() => {
-            printOrderWindow(content.receipt, content.displayOrderNumber);
-        }, 800);
+        // Print 1 Customer Order receipt after KOT is finished
+        await new Promise(res => setTimeout(res, 300));
+        await printOrderWindow(content.receipt, content.displayOrderNumber);
     }
 };
 
